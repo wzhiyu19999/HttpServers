@@ -33,7 +33,6 @@
                 <div class="theme-toggle" title="切换主题">
                     <i class="fa-solid fa-moon"></i>
                 </div>
-                <button id="debugBtn" class="btn" style="margin-left: 10px;">测试API</button>
             </div>
         </header>
 
@@ -52,11 +51,13 @@
                 <!-- 文件和文件夹将通过JavaScript动态添加 -->
             </div>
         </div>
+        <!--
 
         <footer>
             <div class="storage-info">0 B 已使用 / 1 TB 可用</div>
             <div class="powered-by">基于 Nginx 的个人文件共享系统</div>
         </footer>
+          -->
     </div>
 
     <!-- 预览模态框 -->
@@ -79,24 +80,5 @@
     
     <!-- 添加JSZip和FileSaver库 -->
     <script src="script.js"></script>
-    <script>
-        // 测试API按钮
-        document.getElementById('debugBtn').addEventListener('click', function() {
-            console.log('Testing API...');
-            fetch('/api/files')
-                .then(response => {
-                    console.log('API Response Status:', response.status);
-                    return response.json();
-                })
-                .then(data => {
-                    console.log('API Response Data:', data);
-                    alert('API测试完成，请查看控制台');
-                })
-                .catch(error => {
-                    console.error('API Error:', error);
-                    alert('API测试失败: ' + error.message);
-                });
-        });
-    </script>
 </body>
 </html>

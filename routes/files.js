@@ -2,8 +2,9 @@ const express = require('express');
 const router = express.Router();
 const path = require('path');
 const fs = require('fs').promises;
+const fsSync = require('fs'); // Use synchronous fs for archiver and checks
 const mime = require('mime-types');
-const sharp = require('sharp');
+const archiver = require('archiver'); // Import archiver
 const config = require('../config.json');
 
 // Get file list
@@ -94,18 +95,6 @@ router.post('/upload', async (req, res) => {
       
       const targetPath = path.join(config.sharePath, uploadPath, originalName);
       await file.mv(targetPath);
-
-      // Generate thumbnail for images
-      if (file.mimetype.startsWith('image/')) {
-        const thumbPath = path.join(config.sharePath, uploadPath, '.thumbs');
-        await fs.mkdir(thumbPath, { recursive: true });
-        await sharp(targetPath)
-          .resize(config.thumbnailSize.width, config.thumbnailSize.height, {
-            fit: 'inside',
-            withoutEnlargement: true
-          })
-          .toFile(path.join(thumbPath, originalName));
-      }
 
       return {
         name: originalName,
@@ -303,6 +292,122 @@ router.get('/preview/:filename', async (req, res) => {
     res.status(500).json({
       success: false,
       message: 'Error previewing file',
+      error: error.message
+    });
+  }
+});
+
+// Download folder as zip
+router.get('/download-folder', async (req, res) => {
+  try {
+    if (!config.permissions.download) {
+      return res.status(403).json({ success: false, message: 'Download not allowed' });
+    }
+
+    const folderRelativePath = req.query.path ? decodeURIComponent(req.query.path) : '';
+    if (!folderRelativePath) {
+      return res.status(400).json({ success: false, message: 'Folder path is required' });
+    }
+
+    const folderFullPath = path.join(config.sharePath, folderRelativePath);
+    const folderName = path.basename(folderRelativePath) || 'shared_files'; // Use 'shared_files' if it's the root
+
+    // Check if the path exists and is a directory using sync fs before proceeding
+    if (!fsSync.existsSync(folderFullPath) || !fsSync.statSync(folderFullPath).isDirectory()) {
+      console.error('Download folder path invalid or not found:', folderFullPath);
+      return res.status(404).json({ success: false, message: 'Folder not found or is not a directory' });
+    }
+
+    const zipFileName = `${folderName}.zip`;
+    res.attachment(zipFileName); // Set headers for zip download
+
+    const archive = archiver('zip', {
+      zlib: { level: config.zipCompressionLevel !== undefined ? config.zipCompressionLevel : 6 } // Default level 6
+    });
+
+    // Handle errors during archiving
+    archive.on('warning', (err) => {
+      if (err.code === 'ENOENT') {
+        console.warn('Archiver warning:', err);
+      } else {
+        console.error('Archiver error:', err);
+        // Don't try to send JSON if headers already sent
+        if (!res.headersSent) {
+            res.status(500).send({ error: 'Archive creation warning led to failure' });
+        }
+      }
+    });
+
+    archive.on('error', (err) => {
+      console.error('Archiver fatal error:', err);
+      if (!res.headersSent) {
+          res.status(500).send({ error: 'Archive creation failed' });
+      }
+    });
+
+    // Pipe archive data to the response
+    archive.pipe(res);
+
+    // Add folder contents
+    // The second argument 'false' means files will be added directly to the zip root
+    // Use the folderName if you want files inside a directory named after the folder within the zip
+    archive.directory(folderFullPath, folderName); 
+
+    // Finalize the archive
+    await archive.finalize();
+    console.log(`Successfully created and streamed zip archive for: ${folderRelativePath}`);
+
+  } catch (error) {
+    console.error('Error during zip archive creation process:', error);
+    if (!res.headersSent) {
+      res.status(500).json({ success: false, message: 'Error creating zip archive', error: error.message });
+    }
+  }
+});
+
+// Download single file
+router.get('/download/:filename', async (req, res) => {
+  try {
+    if (!config.permissions.download) {
+      return res.status(403).json({
+        success: false,
+        message: 'Download not allowed'
+      });
+    }
+
+    const filename = decodeURIComponent(req.params.filename);
+    const filePath = path.join(config.sharePath, req.query.path || '', filename);
+    
+    // Check if file exists
+    try {
+      await fs.access(filePath);
+    } catch (error) {
+      return res.status(404).json({
+        success: false,
+        message: 'File not found'
+      });
+    }
+
+    // Get file stats
+    const stats = await fs.stat(filePath);
+
+    // Get file type
+    const fileType = mime.lookup(filename) || 'application/octet-stream';
+
+    // Set headers for file download
+    res.attachment(filename);
+    res.type(fileType);
+
+    // Stream file content
+    const fileStream = fs.createReadStream(filePath);
+    fileStream.pipe(res);
+
+    console.log(`File downloaded: ${filename}`);
+  } catch (error) {
+    console.error('Error downloading file:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Error downloading file',
       error: error.message
     });
   }

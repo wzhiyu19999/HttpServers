@@ -323,13 +323,11 @@ document.addEventListener('DOMContentLoaded', function() {
                 ${file.name}
             </div>
             <div class="modified">${formatDate(file.modified)}</div>
-            <div class="size">${formatFileSize(file.size)}</div>
+            <div class="size">${file.isDirectory ? '-' : formatFileSize(file.size)}</div>
             <div class="file-actions">
-                ${!file.isDirectory ? `
                 <button class="action-btn download-btn" title="下载">
                     <i class="fa-solid fa-download"></i>
                 </button>
-                ` : ''}
                 <button class="action-btn delete-btn" title="删除">
                     <i class="fa-solid fa-trash"></i>
                 </button>
@@ -338,12 +336,12 @@ document.addEventListener('DOMContentLoaded', function() {
         
         fileContainer.appendChild(fileItem);
         
-        // 添加文件下载事件
-        if (!file.isDirectory) {
-            const downloadBtn = fileItem.querySelector('.download-btn');
+        // 添加下载事件 (handles both files and folders)
+        const downloadBtn = fileItem.querySelector('.download-btn');
+        if (downloadBtn) { // Check if download button exists
             downloadBtn.addEventListener('click', function(e) {
                 e.stopPropagation();
-                downloadFile(file);
+                downloadItem(file); // Use a new function to handle both
             });
         }
         
@@ -355,21 +353,20 @@ document.addEventListener('DOMContentLoaded', function() {
         });
     }
 
-    // 下载文件
+    // Function to handle download for both files and folders
+    function downloadItem(file) {
+        if (file.isDirectory) {
+            // Trigger folder download (zip)
+            window.location.href = `/api/files/download-folder?path=${encodeURIComponent(file.path)}`;
+        } else {
+            // Trigger file download (existing logic)
+            downloadFile(file);
+        }
+    }
+
+    // 下载文件 (Original function)
     function downloadFile(file) {
-        const currentPath = document.querySelector('.breadcrumb').getAttribute('data-path') || '';
-        const filePath = currentPath ? `${currentPath}/${file.name}` : file.name;
-        
-        // 显示 Toast 通知
-        showToast(`正在下载 ${file.name}...`, 'info');
-        
-        // 创建一个隐藏的链接元素，设置下载属性，然后点击它
-        const a = document.createElement('a');
-        a.href = `/shared/${encodeURIComponent(filePath)}`;
-        a.download = file.name;
-        document.body.appendChild(a);
-        a.click();
-        document.body.removeChild(a);
+        window.location.href = `/api/files/download/${encodeURIComponent(file.name)}?path=${encodeURIComponent(file.path.substring(0, file.path.lastIndexOf('/')))}`;
     }
 
     // 删除文件或文件夹
