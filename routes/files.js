@@ -1,416 +1,674 @@
 const express = require('express');
-const router = express.Router();
 const path = require('path');
 const fs = require('fs').promises;
-const fsSync = require('fs'); // Use synchronous fs for archiver and checks
+const fsSync = require('fs'); // For synchronous operations
 const mime = require('mime-types');
-const archiver = require('archiver'); // Import archiver
-const config = require('../config.json');
+const archiver = require('archiver');
+const { pipeline } = require('stream');
+const util = require('util');
 
-// Get file list
-router.get('/', async (req, res) => {
-  try {
-    const directory = req.query.path || '';
-    const fullPath = path.join(config.sharePath, directory);
-    
-    console.log('Requested directory:', directory);
-    console.log('Full path:', fullPath);
-    
-    const files = await fs.readdir(fullPath, { encoding: 'utf8' });
-    console.log('Files found:', files);
-    
-    const fileList = await Promise.all(files.map(async (file) => {
-      const filePath = path.join(fullPath, file);
-      const stats = await fs.stat(filePath);
-      const isDirectory = stats.isDirectory();
+// Export a function that accepts the config object
+module.exports = function(config) {
+  const router = express.Router();
+
+  // Validate path to prevent directory traversal attacks
+  const isPathSafe = (requestedPath) => {
+    const normalizedPath = path.normalize(requestedPath);
+    return !normalizedPath.includes('..');
+  };
+
+  // Get file list
+  router.get('/', async (req, res) => {
+    try {
+      const directory = req.query.path || '';
       
-      if (config.excludedFiles.includes(file)) {
-        return null;
+      // Security check for path traversal
+      if (!isPathSafe(directory)) {
+        return res.status(400).json({
+          success: false,
+          message: 'Invalid path'
+        });
       }
-
-      return {
-        name: file,
-        path: path.join(directory, file),
-        size: stats.size,
-        modified: stats.mtime,
-        isDirectory,
-        type: isDirectory ? 'folder' : mime.lookup(file) || 'application/octet-stream'
-      };
-    }));
-
-    const result = {
-      success: true,
-      files: fileList.filter(file => file !== null)
-    };
-    
-    console.log('Sending response:', result);
-    res.json(result);
-  } catch (error) {
-    console.error('Error getting file list:', error);
-    res.status(500).json({
-      success: false,
-      message: 'Error getting file list',
-      error: error.message
-    });
-  }
-});
-
-// Upload file
-router.post('/upload', async (req, res) => {
-  try {
-    if (!config.permissions.upload) {
-      return res.status(403).json({
-        success: false,
-        message: 'Upload not allowed'
-      });
-    }
-
-    if (!req.files || Object.keys(req.files).length === 0) {
-      return res.status(400).json({
-        success: false,
-        message: 'No files were uploaded'
-      });
-    }
-
-    const uploadPath = req.query.path || '';
-    const files = Array.isArray(req.files.files) ? req.files.files : [req.files.files];
-
-    const uploadPromises = files.map(async (file) => {
-      // Fix for Chinese filenames - properly decode the filename
-      // The filename may be URL encoded from the browser
-      let originalName = Buffer.from(file.name, 'binary').toString('utf8');
       
-      // If the name is still garbled, try additional decoding
+      const fullPath = path.join(config.sharePath, directory);
+      
+      // Check if directory exists
       try {
-        if (/%[0-9A-F]{2}/.test(originalName)) {
-          originalName = decodeURIComponent(originalName);
+        const stats = await fs.stat(fullPath);
+        if (!stats.isDirectory()) {
+          return res.status(400).json({
+            success: false,
+            message: 'Path is not a directory'
+          });
         }
-      } catch (e) {
-        console.error('Error decoding filename:', e);
-        // Keep the original name if decoding fails
+      } catch (err) {
+        return res.status(404).json({
+          success: false,
+          message: 'Directory not found'
+        });
       }
       
-      console.log('Original filename:', file.name);
-      console.log('Decoded filename:', originalName);
+      const files = await fs.readdir(fullPath, { encoding: 'utf8' });
       
-      const targetPath = path.join(config.sharePath, uploadPath, originalName);
-      await file.mv(targetPath);
+      const fileList = await Promise.all(files.map(async (file) => {
+        try {
+          const filePath = path.join(fullPath, file);
+          const stats = await fs.stat(filePath);
+          const isDirectory = stats.isDirectory();
+          
+          // Skip excluded files if configured
+          if (config.excludedFiles && config.excludedFiles.includes(file)) {
+            return null;
+          }
 
-      return {
-        name: originalName,
-        size: file.size,
-        type: file.mimetype
+          return {
+            name: file,
+            path: path.join(directory, file),
+            size: stats.size,
+            modified: stats.mtime,
+            isDirectory,
+            type: isDirectory ? 'folder' : mime.lookup(file) || 'application/octet-stream'
+          };
+        } catch (error) {
+          // Skip files with errors (e.g., permission issues)
+          console.error(`Error processing file ${file}:`, error);
+          return null;
+        }
+      }));
+
+      const result = {
+        success: true,
+        files: fileList.filter(file => file !== null)
       };
-    });
-
-    const uploadedFiles = await Promise.all(uploadPromises);
-
-    res.json({
-      success: true,
-      files: uploadedFiles
-    });
-  } catch (error) {
-    console.error('Error uploading files:', error);
-    res.status(500).json({
-      success: false,
-      message: 'Error uploading files',
-      error: error.message
-    });
-  }
-});
-
-// Delete file
-router.delete('/:filename', async (req, res) => {
-  try {
-    if (!config.permissions.delete) {
-      return res.status(403).json({
-        success: false,
-        message: 'Delete not allowed'
-      });
-    }
-
-    const filename = decodeURIComponent(req.params.filename);
-    const filePath = path.join(config.sharePath, req.query.path || '', filename);
-    await fs.unlink(filePath);
-
-    res.json({
-      success: true,
-      message: 'File deleted successfully'
-    });
-  } catch (error) {
-    res.status(500).json({
-      success: false,
-      message: 'Error deleting file',
-      error: error.message
-    });
-  }
-});
-
-// Rename file
-router.put('/rename/:filename', async (req, res) => {
-  try {
-    if (!config.permissions.rename) {
-      return res.status(403).json({
-        success: false,
-        message: 'Rename not allowed'
-      });
-    }
-
-    const oldFilename = decodeURIComponent(req.params.filename);
-    const newFilename = decodeURIComponent(req.body.newName);
-    
-    const oldPath = path.join(config.sharePath, req.query.path || '', oldFilename);
-    const newPath = path.join(config.sharePath, req.query.path || '', newFilename);
-
-    await fs.rename(oldPath, newPath);
-
-    res.json({
-      success: true,
-      message: 'File renamed successfully'
-    });
-  } catch (error) {
-    res.status(500).json({
-      success: false,
-      message: 'Error renaming file',
-      error: error.message
-    });
-  }
-});
-
-// Move file
-router.put('/move/:filename', async (req, res) => {
-  try {
-    if (!config.permissions.move) {
-      return res.status(403).json({
-        success: false,
-        message: 'Move not allowed'
-      });
-    }
-
-    const filename = decodeURIComponent(req.params.filename);
-    const targetPath = decodeURIComponent(req.body.targetPath);
-    
-    const sourcePath = path.join(config.sharePath, req.query.path || '', filename);
-    const destinationPath = path.join(config.sharePath, targetPath, filename);
-
-    await fs.rename(sourcePath, destinationPath);
-
-    res.json({
-      success: true,
-      message: 'File moved successfully'
-    });
-  } catch (error) {
-    res.status(500).json({
-      success: false,
-      message: 'Error moving file',
-      error: error.message
-    });
-  }
-});
-
-// Get file content for preview
-router.get('/preview/:filename', async (req, res) => {
-  try {
-    if (!config.permissions.download) {
-      return res.status(403).json({
-        success: false,
-        message: 'Preview not allowed'
-      });
-    }
-
-    const filename = decodeURIComponent(req.params.filename);
-    const filePath = path.join(config.sharePath, req.query.path || '', filename);
-    
-    // Check if file exists
-    try {
-      await fs.access(filePath);
+      
+      res.json(result);
     } catch (error) {
-      return res.status(404).json({
+      console.error('Error getting file list:', error);
+      res.status(500).json({
         success: false,
-        message: 'File not found'
+        message: 'Error getting file list',
+        error: process.env.NODE_ENV !== 'production' ? error.message : undefined
       });
     }
+  });
 
-    // Get file stats
-    const stats = await fs.stat(filePath);
-    if (stats.size > config.maxPreviewSize) {
-      return res.status(413).json({
-        success: false,
-        message: 'File too large for preview'
-      });
-    }
-
-    // Get file type
-    const fileType = mime.lookup(filename) || 'application/octet-stream';
-    const fileCategory = fileType.split('/')[0];
-
-    // Read file content
-    let content = null;
-    let previewType = 'none';
-
-    // Handle different file types
-    if (fileType.startsWith('text/') || 
-        fileType === 'application/json' || 
-        fileType === 'application/javascript' ||
-        fileType === 'application/xml') {
-      // Text files
-      content = await fs.readFile(filePath, 'utf8');
-      previewType = 'text';
-    } else if (fileCategory === 'image') {
-      // Images - send base64 for small images, or just the URL for larger ones
-      if (stats.size < 1024 * 1024) { // Less than 1MB
-        const buffer = await fs.readFile(filePath);
-        content = `data:${fileType};base64,${buffer.toString('base64')}`;
-      } else {
-        content = `/shared/${encodeURIComponent(req.query.path ? req.query.path + '/' + filename : filename)}`;
+  // Upload file
+  router.post('/upload', async (req, res) => {
+    try {
+      // Permission check
+      if (!config.permissions || !config.permissions.upload) {
+        return res.status(403).json({
+          success: false,
+          message: 'Upload not allowed'
+        });
       }
-      previewType = 'image';
-    } else if (fileType === 'application/pdf') {
-      // PDF files - send the URL
-      content = `/shared/${encodeURIComponent(req.query.path ? req.query.path + '/' + filename : filename)}`;
-      previewType = 'pdf';
-    } else if (fileCategory === 'video') {
-      // Video files - send the URL
-      content = `/shared/${encodeURIComponent(req.query.path ? req.query.path + '/' + filename : filename)}`;
-      previewType = 'video';
-    } else if (fileCategory === 'audio') {
-      // Audio files - send the URL
-      content = `/shared/${encodeURIComponent(req.query.path ? req.query.path + '/' + filename : filename)}`;
-      previewType = 'audio';
-    }
 
-    res.json({
-      success: true,
-      filename,
-      fileType,
-      previewType,
-      content,
-      size: stats.size
-    });
-  } catch (error) {
-    console.error('Error previewing file:', error);
-    res.status(500).json({
-      success: false,
-      message: 'Error previewing file',
-      error: error.message
-    });
-  }
-});
+      if (!req.files || Object.keys(req.files).length === 0) {
+        return res.status(400).json({
+          success: false,
+          message: 'No files were uploaded'
+        });
+      }
 
-// Download folder as zip
-router.get('/download-folder', async (req, res) => {
-  try {
-    if (!config.permissions.download) {
-      return res.status(403).json({ success: false, message: 'Download not allowed' });
-    }
+      const uploadPath = req.query.path || '';
+      
+      // Security check for path traversal
+      if (!isPathSafe(uploadPath)) {
+        return res.status(400).json({
+          success: false,
+          message: 'Invalid upload path'
+        });
+      }
+      
+      // Ensure upload directory exists
+      const fullUploadPath = path.join(config.sharePath, uploadPath);
+      try {
+        await fs.mkdir(fullUploadPath, { recursive: true });
+      } catch (err) {
+        console.error('Error creating upload directory:', err);
+        return res.status(500).json({
+          success: false,
+          message: 'Could not create upload directory'
+        });
+      }
+      
+      const files = Array.isArray(req.files.files) ? req.files.files : [req.files.files];
 
-    const folderRelativePath = req.query.path ? decodeURIComponent(req.query.path) : '';
-    if (!folderRelativePath) {
-      return res.status(400).json({ success: false, message: 'Folder path is required' });
-    }
+      const uploadPromises = files.map(async (file) => {
+        try {
+          // Fix for Chinese filenames - properly decode the filename
+          let originalName = Buffer.from(file.name, 'binary').toString('utf8');
+          
+          // If the name is still garbled, try additional decoding
+          try {
+            if (/%[0-9A-F]{2}/.test(originalName)) {
+              originalName = decodeURIComponent(originalName);
+            }
+          } catch (e) {
+            console.error('Error decoding filename:', e);
+            // Keep the original name if decoding fails
+          }
+          
+          const targetPath = path.join(config.sharePath, uploadPath, originalName);
+          await file.mv(targetPath);
 
-    const folderFullPath = path.join(config.sharePath, folderRelativePath);
-    const folderName = path.basename(folderRelativePath) || 'shared_files'; // Use 'shared_files' if it's the root
-
-    // Check if the path exists and is a directory using sync fs before proceeding
-    if (!fsSync.existsSync(folderFullPath) || !fsSync.statSync(folderFullPath).isDirectory()) {
-      console.error('Download folder path invalid or not found:', folderFullPath);
-      return res.status(404).json({ success: false, message: 'Folder not found or is not a directory' });
-    }
-
-    const zipFileName = `${folderName}.zip`;
-    res.attachment(zipFileName); // Set headers for zip download
-
-    const archive = archiver('zip', {
-      zlib: { level: config.zipCompressionLevel !== undefined ? config.zipCompressionLevel : 6 } // Default level 6
-    });
-
-    // Handle errors during archiving
-    archive.on('warning', (err) => {
-      if (err.code === 'ENOENT') {
-        console.warn('Archiver warning:', err);
-      } else {
-        console.error('Archiver error:', err);
-        // Don't try to send JSON if headers already sent
-        if (!res.headersSent) {
-            res.status(500).send({ error: 'Archive creation warning led to failure' });
+          return {
+            name: originalName,
+            size: file.size,
+            type: file.mimetype
+          };
+        } catch (error) {
+          console.error(`Error uploading file ${file.name}:`, error);
+          return {
+            name: file.name,
+            error: error.message
+          };
         }
-      }
-    });
-
-    archive.on('error', (err) => {
-      console.error('Archiver fatal error:', err);
-      if (!res.headersSent) {
-          res.status(500).send({ error: 'Archive creation failed' });
-      }
-    });
-
-    // Pipe archive data to the response
-    archive.pipe(res);
-
-    // Add folder contents
-    // The second argument 'false' means files will be added directly to the zip root
-    // Use the folderName if you want files inside a directory named after the folder within the zip
-    archive.directory(folderFullPath, folderName); 
-
-    // Finalize the archive
-    await archive.finalize();
-    console.log(`Successfully created and streamed zip archive for: ${folderRelativePath}`);
-
-  } catch (error) {
-    console.error('Error during zip archive creation process:', error);
-    if (!res.headersSent) {
-      res.status(500).json({ success: false, message: 'Error creating zip archive', error: error.message });
-    }
-  }
-});
-
-// Download single file
-router.get('/download/:filename', async (req, res) => {
-  try {
-    if (!config.permissions.download) {
-      return res.status(403).json({
-        success: false,
-        message: 'Download not allowed'
       });
-    }
 
-    const filename = decodeURIComponent(req.params.filename);
-    const filePath = path.join(config.sharePath, req.query.path || '', filename);
-    
-    // Check if file exists
-    try {
-      await fs.access(filePath);
+      const uploadedFiles = await Promise.all(uploadPromises);
+      
+      // Check if any files failed to upload
+      const hasErrors = uploadedFiles.some(file => file.error);
+      
+      res.status(hasErrors ? 207 : 200).json({
+        success: !hasErrors,
+        files: uploadedFiles
+      });
     } catch (error) {
-      return res.status(404).json({
+      console.error('Error uploading files:', error);
+      res.status(500).json({
         success: false,
-        message: 'File not found'
+        message: 'Error uploading files',
+        error: process.env.NODE_ENV !== 'production' ? error.message : undefined
       });
     }
+  });
 
-    // Get file stats
-    const stats = await fs.stat(filePath);
+  // Delete file
+  router.delete('/:filename', async (req, res) => {
+    try {
+      // Permission check
+      if (!config.permissions || !config.permissions.delete) {
+        return res.status(403).json({
+          success: false,
+          message: 'Delete not allowed'
+        });
+      }
 
-    // Get file type
-    const fileType = mime.lookup(filename) || 'application/octet-stream';
+      const filename = decodeURIComponent(req.params.filename);
+      const filePath = req.query.path || '';
+      
+      // Security check for path traversal
+      if (!isPathSafe(filePath) || !isPathSafe(filename)) {
+        return res.status(400).json({
+          success: false,
+          message: 'Invalid path'
+        });
+      }
+      
+      const fullPath = path.join(config.sharePath, filePath, filename);
+      
+      // Check if file exists
+      try {
+        await fs.access(fullPath);
+      } catch (err) {
+        return res.status(404).json({
+          success: false,
+          message: 'File not found'
+        });
+      }
+      
+      await fs.unlink(fullPath);
 
-    // Set headers for file download
-    res.attachment(filename);
-    res.type(fileType);
+      res.json({
+        success: true,
+        message: 'File deleted successfully'
+      });
+    } catch (error) {
+      console.error('Error deleting file:', error);
+      res.status(500).json({
+        success: false,
+        message: 'Error deleting file',
+        error: process.env.NODE_ENV !== 'production' ? error.message : undefined
+      });
+    }
+  });
 
-    // Stream file content
-    const fileStream = fs.createReadStream(filePath);
-    fileStream.pipe(res);
+  // Rename file
+  router.put('/rename/:filename', async (req, res) => {
+    try {
+      // Permission check
+      if (!config.permissions || !config.permissions.rename) {
+        return res.status(403).json({
+          success: false,
+          message: 'Rename not allowed'
+        });
+      }
 
-    console.log(`File downloaded: ${filename}`);
-  } catch (error) {
-    console.error('Error downloading file:', error);
-    res.status(500).json({
-      success: false,
-      message: 'Error downloading file',
-      error: error.message
-    });
-  }
-});
+      const oldFilename = decodeURIComponent(req.params.filename);
+      const newFilename = decodeURIComponent(req.body.newName);
+      const filePath = req.query.path || '';
+      
+      // Security check for path traversal
+      if (!isPathSafe(filePath) || !isPathSafe(oldFilename) || !isPathSafe(newFilename)) {
+        return res.status(400).json({
+          success: false,
+          message: 'Invalid path'
+        });
+      }
+      
+      const oldPath = path.join(config.sharePath, filePath, oldFilename);
+      const newPath = path.join(config.sharePath, filePath, newFilename);
+      
+      // Check if source file exists
+      try {
+        await fs.access(oldPath);
+      } catch (err) {
+        return res.status(404).json({
+          success: false,
+          message: 'Source file not found'
+        });
+      }
+      
+      // Check if destination file already exists
+      try {
+        await fs.access(newPath);
+        return res.status(409).json({
+          success: false,
+          message: 'Destination file already exists'
+        });
+      } catch (err) {
+        // This is good - we want the destination to not exist
+      }
 
-module.exports = router;
+      await fs.rename(oldPath, newPath);
+
+      res.json({
+        success: true,
+        message: 'File renamed successfully'
+      });
+    } catch (error) {
+      console.error('Error renaming file:', error);
+      res.status(500).json({
+        success: false,
+        message: 'Error renaming file',
+        error: process.env.NODE_ENV !== 'production' ? error.message : undefined
+      });
+    }
+  });
+
+  // Move file
+  router.put('/move/:filename', async (req, res) => {
+    try {
+      // Permission check
+      if (!config.permissions || !config.permissions.move) {
+        return res.status(403).json({
+          success: false,
+          message: 'Move not allowed'
+        });
+      }
+
+      const filename = decodeURIComponent(req.params.filename);
+      const sourcePath = req.query.path || '';
+      const targetPath = decodeURIComponent(req.body.targetPath || '');
+      
+      // Security check for path traversal
+      if (!isPathSafe(sourcePath) || !isPathSafe(targetPath) || !isPathSafe(filename)) {
+        return res.status(400).json({
+          success: false,
+          message: 'Invalid path'
+        });
+      }
+      
+      const oldPath = path.join(config.sharePath, sourcePath, filename);
+      const newPath = path.join(config.sharePath, targetPath, filename);
+      
+      // Check if source file exists
+      try {
+        await fs.access(oldPath);
+      } catch (err) {
+        return res.status(404).json({
+          success: false,
+          message: 'Source file not found'
+        });
+      }
+      
+      // Ensure target directory exists
+      try {
+        await fs.mkdir(path.join(config.sharePath, targetPath), { recursive: true });
+      } catch (err) {
+        console.error('Error creating target directory:', err);
+        return res.status(500).json({
+          success: false,
+          message: 'Could not create target directory'
+        });
+      }
+      
+      // Check if destination file already exists
+      try {
+        await fs.access(newPath);
+        return res.status(409).json({
+          success: false,
+          message: 'Destination file already exists'
+        });
+      } catch (err) {
+        // This is good - we want the destination to not exist
+      }
+
+      await fs.rename(oldPath, newPath);
+
+      res.json({
+        success: true,
+        message: 'File moved successfully'
+      });
+    } catch (error) {
+      console.error('Error moving file:', error);
+      res.status(500).json({
+        success: false,
+        message: 'Error moving file',
+        error: process.env.NODE_ENV !== 'production' ? error.message : undefined
+      });
+    }
+  });
+
+  // Download file
+  router.get('/download/:filename', async (req, res) => {
+    try {
+      // Permission check
+      if (!config.permissions || !config.permissions.download) {
+        return res.status(403).json({
+          success: false,
+          message: 'Download not allowed'
+        });
+      }
+
+      const filename = decodeURIComponent(req.params.filename);
+      const filePath = req.query.path || '';
+      
+      // Security check for path traversal
+      if (!isPathSafe(filePath) || !isPathSafe(filename)) {
+        return res.status(400).json({
+          success: false,
+          message: 'Invalid path'
+        });
+      }
+      
+      const fullPath = path.join(config.sharePath, filePath, filename);
+      
+      // Check if file exists
+      try {
+        const stats = await fs.stat(fullPath);
+        if (stats.isDirectory()) {
+          return res.status(400).json({
+            success: false,
+            message: 'Cannot download a directory'
+          });
+        }
+      } catch (err) {
+        return res.status(404).json({
+          success: false,
+          message: 'File not found'
+        });
+      }
+
+      res.download(fullPath, filename, (err) => {
+        if (err) {
+          console.error('Error downloading file:', err);
+          // Only send error if headers haven't been sent yet
+          if (!res.headersSent) {
+            res.status(500).json({
+              success: false,
+              message: 'Error downloading file',
+              error: process.env.NODE_ENV !== 'production' ? err.message : undefined
+            });
+          }
+        }
+      });
+    } catch (error) {
+      console.error('Error downloading file:', error);
+      res.status(500).json({
+        success: false,
+        message: 'Error downloading file',
+        error: process.env.NODE_ENV !== 'production' ? error.message : undefined
+      });
+    }
+  });
+
+  // Download folder as zip
+  router.get('/download-folder', async (req, res) => {
+    try {
+      // Permission check
+      if (!config.permissions || !config.permissions.download) {
+        return res.status(403).json({
+          success: false,
+          message: 'Download not allowed'
+        });
+      }
+
+      const folderPath = req.query.path || '';
+      
+      // Security check for path traversal
+      if (!isPathSafe(folderPath)) {
+        return res.status(400).json({
+          success: false,
+          message: 'Invalid path'
+        });
+      }
+      
+      const fullPath = path.join(config.sharePath, folderPath);
+      
+      // Check if folder exists
+      try {
+        const stats = await fs.stat(fullPath);
+        if (!stats.isDirectory()) {
+          return res.status(400).json({
+            success: false,
+            message: 'Path is not a directory'
+          });
+        }
+      } catch (err) {
+        return res.status(404).json({
+          success: false,
+          message: 'Folder not found'
+        });
+      }
+
+      // Set appropriate headers
+      res.setHeader('Content-Type', 'application/zip');
+      res.setHeader('Content-Disposition', `attachment; filename="${path.basename(folderPath) || 'download'}.zip"`);
+
+      // Create zip archive
+      const archive = archiver('zip', {
+        zlib: { level: 6 } // Compression level
+      });
+
+      // Handle archive warnings
+      archive.on('warning', (err) => {
+        if (err.code === 'ENOENT') {
+          console.warn('Archive warning:', err);
+        } else {
+          console.error('Archive error:', err);
+          // Only end response if headers haven't been sent
+          if (!res.headersSent) {
+            res.end();
+          }
+        }
+      });
+
+      // Handle archive errors
+      archive.on('error', (err) => {
+        console.error('Archive error:', err);
+        // Only end response if headers haven't been sent
+        if (!res.headersSent) {
+          res.status(500).json({
+            success: false,
+            message: 'Error creating zip archive',
+            error: process.env.NODE_ENV !== 'production' ? err.message : undefined
+          });
+        }
+      });
+
+      // Pipe archive data to response
+      archive.pipe(res);
+
+      // Add folder contents to archive
+      archive.directory(fullPath, path.basename(folderPath) || 'folder');
+
+      // Finalize archive
+      await archive.finalize();
+    } catch (error) {
+      console.error('Error downloading folder:', error);
+      // Only send error if headers haven't been sent yet
+      if (!res.headersSent) {
+        res.status(500).json({
+          success: false,
+          message: 'Error downloading folder',
+          error: process.env.NODE_ENV !== 'production' ? error.message : undefined
+        });
+      }
+    }
+  });
+
+  // Preview file
+  router.get('/preview/:filename', async (req, res) => {
+    try {
+      // Permission check
+      if (!config.permissions || !config.permissions.preview) {
+        return res.status(403).json({
+          success: false,
+          message: 'Preview not allowed'
+        });
+      }
+
+      const filename = decodeURIComponent(req.params.filename);
+      const filePath = req.query.path || '';
+      
+      // Security check for path traversal
+      if (!isPathSafe(filePath) || !isPathSafe(filename)) {
+        return res.status(400).json({
+          success: false,
+          message: 'Invalid path'
+        });
+      }
+      
+      const fullPath = path.join(config.sharePath, filePath, filename);
+      
+      // Check if file exists and get its size
+      let stats;
+      try {
+        stats = await fs.stat(fullPath);
+        if (stats.isDirectory()) {
+          return res.status(400).json({
+            success: false,
+            message: 'Cannot preview a directory'
+          });
+        }
+      } catch (err) {
+        return res.status(404).json({
+          success: false,
+          message: 'File not found'
+        });
+      }
+      
+      // Determine content type
+      const contentType = mime.lookup(filename) || 'application/octet-stream';
+      const fileExtension = path.extname(filename).toLowerCase();
+      
+      // Set different size limits based on file type
+      let maxPreviewSize = config.maxPreviewSize || 5 * 1024 * 1024; // Default 5MB
+      
+      // For text files, we can allow larger files
+      const textFileExtensions = ['.txt', '.md', '.csv', '.json', '.xml', '.html', '.htm', '.css', '.js', '.log', '.ini', '.conf', '.yaml', '.yml'];
+      const imageFileExtensions = ['.jpg', '.jpeg', '.png', '.gif', '.bmp', '.webp', '.svg'];
+      
+      if (textFileExtensions.includes(fileExtension) || contentType.startsWith('text/')) {
+        maxPreviewSize = config.maxTextPreviewSize || 10 * 1024 * 1024; // Default 10MB for text files
+      }
+      
+      if (stats.size > maxPreviewSize) {
+        return res.status(413).json({
+          success: false,
+          message: 'File too large for preview'
+        });
+      }
+
+      // Set appropriate headers for preview
+      res.setHeader('Content-Type', contentType);
+      res.setHeader('Content-Disposition', 'inline');
+      
+      // Special handling for different file types
+      if (textFileExtensions.includes(fileExtension) || contentType.startsWith('text/')) {
+        // For text files, read with encoding to preserve characters
+        try {
+          const content = await fs.readFile(fullPath, 'utf8');
+          return res.send(content);
+        } catch (err) {
+          console.error('Error reading text file:', err);
+          return res.status(500).json({
+            success: false,
+            message: 'Error reading text file',
+            error: process.env.NODE_ENV !== 'production' ? err.message : undefined
+          });
+        }
+      } else if (imageFileExtensions.includes(fileExtension) || contentType.startsWith('image/')) {
+        // For images, just stream the file
+        const fileStream = fsSync.createReadStream(fullPath);
+        fileStream.pipe(res);
+        
+        // Handle stream errors
+        fileStream.on('error', (err) => {
+          console.error('Error streaming image file:', err);
+          if (!res.headersSent) {
+            res.status(500).json({
+              success: false,
+              message: 'Error streaming image file',
+              error: process.env.NODE_ENV !== 'production' ? err.message : undefined
+            });
+          }
+        });
+      } else if (contentType === 'application/pdf') {
+        // For PDFs, stream with appropriate headers
+        const fileStream = fsSync.createReadStream(fullPath);
+        fileStream.pipe(res);
+        
+        // Handle stream errors
+        fileStream.on('error', (err) => {
+          console.error('Error streaming PDF file:', err);
+          if (!res.headersSent) {
+            res.status(500).json({
+              success: false,
+              message: 'Error streaming PDF file',
+              error: process.env.NODE_ENV !== 'production' ? err.message : undefined
+            });
+          }
+        });
+      } else {
+        // For other file types, just stream the file
+        const fileStream = fsSync.createReadStream(fullPath);
+        fileStream.pipe(res);
+        
+        // Handle stream errors
+        fileStream.on('error', (err) => {
+          console.error('Error streaming file:', err);
+          if (!res.headersSent) {
+            res.status(500).json({
+              success: false,
+              message: 'Error streaming file',
+              error: process.env.NODE_ENV !== 'production' ? err.message : undefined
+            });
+          }
+        });
+      }
+    } catch (error) {
+      console.error('Error previewing file:', error);
+      res.status(500).json({
+        success: false,
+        message: 'Error previewing file',
+        error: process.env.NODE_ENV !== 'production' ? error.message : undefined
+      });
+    }
+  });
+
+  return router;
+};

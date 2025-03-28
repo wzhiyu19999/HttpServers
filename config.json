@@ -1,5 +1,6 @@
 {
   "sharePath": "./shared",
+  "port": 8080,
   "maxFileSize": 100000000,
   "maxPreviewSize": 5242880,
   "permissions": {
@@ -11,25 +12,5 @@
     "move": true,
     "dragAndDrop": true,
     "preview": true
-  },
-  "excludedFiles": [
-    ".git",
-    ".env",
-    "node_modules",
-    "config.json"
-  ],
-  "allowedFileTypes": [
-    "image/*",
-    "application/pdf",
-    "text/*",
-    "application/msword",
-    "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-    "application/vnd.ms-excel",
-    "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-  ],
-  "thumbnailSize": {
-    "width": 200,
-    "height": 200
-  },
-  "cacheDuration": 3600
+  }
 }

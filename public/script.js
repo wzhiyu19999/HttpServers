@@ -559,25 +559,116 @@ document.addEventListener('DOMContentLoaded', function() {
         previewFileName.textContent = file.name;
         previewContainer.innerHTML = '<div class="preview-loading">加载预览中...</div>';
         
+        // 检查文件类型
+        const fileExtension = file.name.split('.').pop().toLowerCase();
+        const isImage = ['jpg', 'jpeg', 'png', 'gif', 'bmp', 'webp', 'svg'].includes(fileExtension);
+        const isPdf = fileExtension === 'pdf';
+        const isVideo = ['mp4', 'webm', 'ogg'].includes(fileExtension);
+        const isAudio = ['mp3', 'wav', 'ogg', 'aac'].includes(fileExtension);
+        
         // 获取文件预览内容
-        fetch(`/api/files/preview/${encodeURIComponent(file.name)}?path=${encodeURIComponent(currentPath)}`)
-            .then(response => {
-                if (!response.ok) {
-                    throw new Error(`预览失败: ${response.status}`);
-                }
-                return response.json();
-            })
-            .then(data => {
-                if (data.success) {
-                    renderPreview(data, previewContainer);
-                } else {
-                    previewContainer.innerHTML = `<div class="preview-error">预览失败: ${data.message}</div>`;
-                }
-            })
-            .catch(error => {
-                console.error('Error previewing file:', error);
-                previewContainer.innerHTML = `<div class="preview-error">预览失败: ${error.message}</div>`;
-            });
+        const previewUrl = `/api/files/preview/${encodeURIComponent(file.name)}?path=${encodeURIComponent(currentPath)}`;
+        
+        if (isImage) {
+            // 直接使用图片URL
+            const imgPreview = document.createElement('img');
+            imgPreview.className = 'image-preview';
+            imgPreview.src = previewUrl;
+            imgPreview.alt = file.name;
+            previewContainer.innerHTML = '';
+            previewContainer.appendChild(imgPreview);
+        } else if (isPdf) {
+            // 直接使用PDF URL
+            const pdfPreview = document.createElement('div');
+            pdfPreview.className = 'pdf-preview';
+            pdfPreview.innerHTML = `
+                <iframe src="${previewUrl}" width="100%" height="500px"></iframe>
+            `;
+            previewContainer.innerHTML = '';
+            previewContainer.appendChild(pdfPreview);
+        } else if (isVideo) {
+            // 视频预览
+            const videoPreview = document.createElement('div');
+            videoPreview.className = 'video-preview';
+            videoPreview.innerHTML = `
+                <video controls width="100%">
+                    <source src="${previewUrl}" type="video/${fileExtension}">
+                    您的浏览器不支持视频预览
+                </video>
+            `;
+            previewContainer.innerHTML = '';
+            previewContainer.appendChild(videoPreview);
+        } else if (isAudio) {
+            // 音频预览
+            const audioPreview = document.createElement('div');
+            audioPreview.className = 'audio-preview';
+            audioPreview.innerHTML = `
+                <audio controls style="width:100%">
+                    <source src="${previewUrl}" type="audio/${fileExtension}">
+                    您的浏览器不支持音频预览
+                </audio>
+            `;
+            previewContainer.innerHTML = '';
+            previewContainer.appendChild(audioPreview);
+        } else {
+            // 对于文本和其他类型，尝试获取内容
+            fetch(previewUrl)
+                .then(response => {
+                    if (!response.ok) {
+                        throw new Error(`预览失败: ${response.status}`);
+                    }
+                    
+                    const contentType = response.headers.get('content-type');
+                    
+                    // 如果是JSON响应，解析为JSON
+                    if (contentType && contentType.includes('application/json')) {
+                        return response.json().then(data => {
+                            if (data.success === false) {
+                                throw new Error(data.message || '预览失败');
+                            }
+                            return { type: 'json', data };
+                        });
+                    }
+                    
+                    // 如果是文本类型，返回文本
+                    if (contentType && contentType.includes('text/')) {
+                        return response.text().then(text => {
+                            return { type: 'text', data: text };
+                        });
+                    }
+                    
+                    // 其他类型，显示不支持预览
+                    return { type: 'unsupported' };
+                })
+                .then(result => {
+                    if (result.type === 'text') {
+                        // 文本预览
+                        const textPreview = document.createElement('pre');
+                        textPreview.className = 'text-preview';
+                        textPreview.textContent = result.data;
+                        previewContainer.innerHTML = '';
+                        previewContainer.appendChild(textPreview);
+                    } else if (result.type === 'json') {
+                        // 使用renderPreview处理JSON响应
+                        renderPreview(result.data, previewContainer);
+                    } else {
+                        // 不支持预览
+                        previewContainer.innerHTML = `
+                            <div class="preview-not-supported">
+                                <i class="fa-solid fa-file-circle-exclamation fa-3x"></i>
+                                <p>此文件类型不支持预览</p>
+                                <a href="/shared/${encodeURIComponent(file.name)}?path=${encodeURIComponent(currentPath)}" class="btn primary" download>
+                                    <i class="fa-solid fa-download"></i> 下载文件
+                                </a>
+                            </div>
+                        `;
+                    }
+                })
+                .catch(error => {
+                    console.error('Error previewing file:', error);
+                    previewContainer.innerHTML = `<div class="preview-error">预览失败: ${error.message}</div>`;
+                });
+        }
     }
     
     // 根据文件类型渲染预览

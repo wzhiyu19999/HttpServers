@@ -3,9 +3,25 @@
   "version": "1.0.0",
   "description": "A modern file sharing system with Express.js",
   "main": "server.js",
+  "bin": "server.js",
   "scripts": {
     "start": "node server.js",
-    "dev": "nodemon server.js"
+    "dev": "nodemon server.js",
+    "build": "npm run build:win && npm run build:linux",
+    "build:win": "pkg . --targets node18-win-x64 --output dist/win/file-share",
+    "build:linux": "pkg . --targets node18-linux-x64 --output dist/linux/file-share"
+  },
+  "pkg": {
+    "scripts": [
+      "routes/**/*.js",
+      "server.js"
+    ],
+    "assets": [],
+    "targets": [
+      "node18-win-x64",
+      "node18-linux-x64"
+    ],
+    "outputPath": "dist"
   },
   "dependencies": {
     "archiver": "^7.0.1",
@@ -17,8 +33,9 @@
     "mime-types": "^2.1.35",
     "morgan": "^1.10.0",
     "multer": "^1.4.5-lts.1",
-    "sharp": "^0.33.2",
-    "winston": "^3.11.0"
+    "pkg": "^5.8.1",
+    "winston": "^3.11.0",
+    "yargs": "^17.7.2"
   },
   "devDependencies": {
     "nodemon": "^3.0.3"
