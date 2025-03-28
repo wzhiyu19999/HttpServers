@@ -280,7 +280,6 @@ header {
 
 /* File actions hover effect */
 .file-item .file-actions {
-    opacity: 0.2;
     transition: opacity 0.2s ease;
 }
 
@@ -387,67 +386,92 @@ header {
 }
 
 .file-icon {
-    width: 24px;
-    height: 24px;
+    width: 32px;
+    height: 32px;
     display: flex;
     align-items: center;
     justify-content: center;
+    font-size: 18px;
 }
 
 /* File type specific icons */
 .file-icon i.fa-folder {
     color: #ffd04c;
+    font-size: 20px;
 }
 
 .file-icon i.fa-file-pdf {
     color: #ff4444;
+    font-size: 20px;
 }
 
 .file-icon i.fa-file-word {
     color: #4285f4;
+    font-size: 20px;
 }
 
 .file-icon i.fa-file-excel {
     color: #0f9d58;
+    font-size: 20px;
 }
 
 .file-icon i.fa-file-image {
     color: #ff6b6b;
+    font-size: 20px;
 }
 
 .file-icon i.fa-file-code {
     color: #4a148c;
+    font-size: 20px;
 }
 
 .file-icon i.fa-file {
     color: #5f6368;
+    font-size: 20px;
 }
 
 .file-actions {
     opacity: 1;
     display: flex;
-    gap: 8px;
+    gap: 10px;
     justify-content: center;
     padding-right: 8px;
 }
 
 .action-btn {
-    width: 32px;
-    height: 32px;
+    width: 36px;
+    height: 36px;
     border: none;
     border-radius: 50%;
-    background: transparent;
-    color: var(--secondary-text);
+    background: #f0f0f0;
+    color: #444;
     cursor: pointer;
     transition: all 0.2s ease;
     display: flex;
     align-items: center;
     justify-content: center;
+    font-size: 16px;
 }
 
 .action-btn:hover {
     background: var(--hover-bg);
     color: var(--primary-color);
+    transform: scale(1.1);
+}
+
+.action-btn:active {
+    transform: scale(0.9);
+    opacity: 0.8;
+}
+
+.action-btn.download-btn {
+    background-color: #e8f0fe;
+    color: #1a73e8;
+}
+
+.action-btn.delete-btn {
+    background-color: #fee8e8;
+    color: #ea4335;
 }
 
 /* Footer Styles */
@@ -545,12 +569,18 @@ footer {
 }
 
 [data-theme="dark"] .action-btn {
-    color: #bdc1c6;
+    color: #e8eaed;
+    background: #35363a;
 }
 
-[data-theme="dark"] .action-btn:hover {
-    background: #424346;
-    color: var(--primary-color);
+[data-theme="dark"] .action-btn.download-btn {
+    background-color: #1a3050;
+    color: #8ab4f8;
+}
+
+[data-theme="dark"] .action-btn.delete-btn {
+    background-color: #502a2a;
+    color: #f28b82;
 }
 
 /* Responsive Design */
@@ -586,4 +616,4 @@ footer {
     .logo h1 {
         display: none;
     }
-} 
+}

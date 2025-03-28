@@ -467,10 +467,10 @@ document.addEventListener('DOMContentLoaded', function() {
     document.addEventListener('click', function(e) {
         const fileItem = e.target.closest('.file-item');
         if (fileItem) {
-            const fileName = fileItem.querySelector('.file-name').textContent.trim();
-            const isFolder = fileItem.querySelector('.file-icon i').classList.contains('fa-folder');
+            const isDirectory = fileItem.dataset.isDirectory === 'true';
+            const fileName = fileItem.dataset.name;
             
-            if (isFolder) {
+            if (isDirectory) {
                 // 获取当前路径
                 const currentPath = document.querySelector('.breadcrumb').getAttribute('data-path') || '';
                 const newPath = currentPath ? `${currentPath}/${fileName}` : fileName;
@@ -480,6 +480,24 @@ document.addEventListener('DOMContentLoaded', function() {
                 
                 // 加载新文件夹的内容
                 loadFileList(newPath);
+            }
+        }
+    });
+
+    // 添加双击事件处理
+    document.addEventListener('dblclick', function(e) {
+        const fileItem = e.target.closest('.file-item');
+        if (fileItem) {
+            const isDirectory = fileItem.dataset.isDirectory === 'true';
+            const fileName = fileItem.dataset.name;
+            
+            if (!isDirectory) {
+                // 如果是文件，则打开预览
+                const file = {
+                    name: fileName,
+                    path: fileItem.dataset.path
+                };
+                previewFile(file);
             }
         }
     });
@@ -531,6 +549,111 @@ document.addEventListener('DOMContentLoaded', function() {
             }
         }
     });
+
+    // 预览文件
+    function previewFile(file) {
+        const currentPath = document.querySelector('.breadcrumb').getAttribute('data-path') || '';
+        const modal = document.getElementById('previewModal');
+        const previewContainer = document.getElementById('previewContainer');
+        const previewFileName = document.getElementById('previewFileName');
+        
+        // 显示模态框和加载状态
+        modal.style.display = 'block';
+        previewFileName.textContent = file.name;
+        previewContainer.innerHTML = '<div class="preview-loading">加载预览中...</div>';
+        
+        // 获取文件预览内容
+        fetch(`/api/files/preview/${encodeURIComponent(file.name)}?path=${encodeURIComponent(currentPath)}`)
+            .then(response => {
+                if (!response.ok) {
+                    throw new Error(`预览失败: ${response.status}`);
+                }
+                return response.json();
+            })
+            .then(data => {
+                if (data.success) {
+                    renderPreview(data, previewContainer);
+                } else {
+                    previewContainer.innerHTML = `<div class="preview-error">预览失败: ${data.message}</div>`;
+                }
+            })
+            .catch(error => {
+                console.error('Error previewing file:', error);
+                previewContainer.innerHTML = `<div class="preview-error">预览失败: ${error.message}</div>`;
+            });
+    }
+    
+    // 根据文件类型渲染预览
+    function renderPreview(data, container) {
+        container.innerHTML = '';
+        
+        switch (data.previewType) {
+            case 'text':
+                // 文本预览
+                const textPreview = document.createElement('pre');
+                textPreview.className = 'text-preview';
+                textPreview.textContent = data.content;
+                container.appendChild(textPreview);
+                break;
+                
+            case 'image':
+                // 图片预览
+                const imgPreview = document.createElement('img');
+                imgPreview.className = 'image-preview';
+                imgPreview.src = data.content;
+                imgPreview.alt = data.filename;
+                container.appendChild(imgPreview);
+                break;
+                
+            case 'pdf':
+                // PDF预览
+                const pdfPreview = document.createElement('div');
+                pdfPreview.className = 'pdf-preview';
+                pdfPreview.innerHTML = `
+                    <iframe src="${data.content}" width="100%" height="500px"></iframe>
+                `;
+                container.appendChild(pdfPreview);
+                break;
+                
+            case 'video':
+                // 视频预览
+                const videoPreview = document.createElement('div');
+                videoPreview.className = 'video-preview';
+                videoPreview.innerHTML = `
+                    <video controls width="100%">
+                        <source src="${data.content}" type="${data.fileType}">
+                        您的浏览器不支持视频预览
+                    </video>
+                `;
+                container.appendChild(videoPreview);
+                break;
+                
+            case 'audio':
+                // 音频预览
+                const audioPreview = document.createElement('div');
+                audioPreview.className = 'audio-preview';
+                audioPreview.innerHTML = `
+                    <audio controls style="width:100%">
+                        <source src="${data.content}" type="${data.fileType}">
+                        您的浏览器不支持音频预览
+                    </audio>
+                `;
+                container.appendChild(audioPreview);
+                break;
+                
+            default:
+                // 不支持预览
+                container.innerHTML = `
+                    <div class="preview-not-supported">
+                        <i class="fa-solid fa-file-circle-exclamation fa-3x"></i>
+                        <p>此文件类型不支持预览</p>
+                        <a href="/shared/${encodeURIComponent(data.filename)}" class="btn primary" download>
+                            <i class="fa-solid fa-download"></i> 下载文件
+                        </a>
+                    </div>
+                `;
+        }
+    }
 
     // 添加 CSS 样式
     const style = document.createElement('style');
@@ -612,6 +735,61 @@ document.addEventListener('DOMContentLoaded', function() {
             0% { width: 0%; }
             50% { width: 100%; }
             100% { width: 0%; }
+        }
+        
+        /* 预览样式 */
+        .preview-loading, .preview-error, .preview-not-supported {
+            padding: 30px;
+            text-align: center;
+            color: var(--secondary-text);
+        }
+        
+        .preview-error {
+            color: #ff4444;
+        }
+        
+        .preview-not-supported {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            gap: 15px;
+            padding: 50px 20px;
+        }
+        
+        .preview-not-supported i {
+            color: var(--secondary-text);
+            margin-bottom: 10px;
+        }
+        
+        .text-preview {
+            white-space: pre-wrap;
+            word-wrap: break-word;
+            padding: 15px;
+            background-color: var(--background-secondary);
+            border-radius: 4px;
+            overflow: auto;
+            max-height: 500px;
+            font-family: monospace;
+        }
+        
+        .image-preview {
+            max-width: 100%;
+            max-height: 80vh;
+            display: block;
+            margin: 0 auto;
+            object-fit: contain;
+        }
+        
+        .modal-content {
+            max-width: 90%;
+            max-height: 90vh;
+            width: auto;
+        }
+        
+        .modal-body {
+            overflow: auto;
+            max-height: calc(90vh - 60px);
         }
     `;
     document.head.appendChild(style);

@@ -1,6 +1,7 @@
 {
   "sharePath": "./shared",
   "maxFileSize": 100000000,
+  "maxPreviewSize": 5242880,
   "permissions": {
     "upload": true,
     "delete": true,
@@ -8,7 +9,8 @@
     "rename": true,
     "createFolder": true,
     "move": true,
-    "dragAndDrop": true
+    "dragAndDrop": true,
+    "preview": true
   },
   "excludedFiles": [
     ".git",
@@ -30,4 +32,4 @@
     "height": 200
   },
   "cacheDuration": 3600
-} 
+}
