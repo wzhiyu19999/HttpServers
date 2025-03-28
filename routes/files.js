@@ -15,7 +15,7 @@ router.get('/', async (req, res) => {
     console.log('Requested directory:', directory);
     console.log('Full path:', fullPath);
     
-    const files = await fs.readdir(fullPath);
+    const files = await fs.readdir(fullPath, { encoding: 'utf8' });
     console.log('Files found:', files);
     
     const fileList = await Promise.all(files.map(async (file) => {
@@ -75,7 +75,24 @@ router.post('/upload', async (req, res) => {
     const files = Array.isArray(req.files.files) ? req.files.files : [req.files.files];
 
     const uploadPromises = files.map(async (file) => {
-      const targetPath = path.join(config.sharePath, uploadPath, file.name);
+      // Fix for Chinese filenames - properly decode the filename
+      // The filename may be URL encoded from the browser
+      let originalName = Buffer.from(file.name, 'binary').toString('utf8');
+      
+      // If the name is still garbled, try additional decoding
+      try {
+        if (/%[0-9A-F]{2}/.test(originalName)) {
+          originalName = decodeURIComponent(originalName);
+        }
+      } catch (e) {
+        console.error('Error decoding filename:', e);
+        // Keep the original name if decoding fails
+      }
+      
+      console.log('Original filename:', file.name);
+      console.log('Decoded filename:', originalName);
+      
+      const targetPath = path.join(config.sharePath, uploadPath, originalName);
       await file.mv(targetPath);
 
       // Generate thumbnail for images
@@ -87,11 +104,11 @@ router.post('/upload', async (req, res) => {
             fit: 'inside',
             withoutEnlargement: true
           })
-          .toFile(path.join(thumbPath, file.name));
+          .toFile(path.join(thumbPath, originalName));
       }
 
       return {
-        name: file.name,
+        name: originalName,
         size: file.size,
         type: file.mimetype
       };
@@ -104,6 +121,7 @@ router.post('/upload', async (req, res) => {
       files: uploadedFiles
     });
   } catch (error) {
+    console.error('Error uploading files:', error);
     res.status(500).json({
       success: false,
       message: 'Error uploading files',
@@ -122,7 +140,8 @@ router.delete('/:filename', async (req, res) => {
       });
     }
 
-    const filePath = path.join(config.sharePath, req.query.path || '', req.params.filename);
+    const filename = decodeURIComponent(req.params.filename);
+    const filePath = path.join(config.sharePath, req.query.path || '', filename);
     await fs.unlink(filePath);
 
     res.json({
@@ -148,8 +167,11 @@ router.put('/rename/:filename', async (req, res) => {
       });
     }
 
-    const oldPath = path.join(config.sharePath, req.query.path || '', req.params.filename);
-    const newPath = path.join(config.sharePath, req.query.path || '', req.body.newName);
+    const oldFilename = decodeURIComponent(req.params.filename);
+    const newFilename = decodeURIComponent(req.body.newName);
+    
+    const oldPath = path.join(config.sharePath, req.query.path || '', oldFilename);
+    const newPath = path.join(config.sharePath, req.query.path || '', newFilename);
 
     await fs.rename(oldPath, newPath);
 
@@ -176,10 +198,13 @@ router.put('/move/:filename', async (req, res) => {
       });
     }
 
-    const sourcePath = path.join(config.sharePath, req.query.path || '', req.params.filename);
-    const targetPath = path.join(config.sharePath, req.body.targetPath, req.params.filename);
+    const filename = decodeURIComponent(req.params.filename);
+    const targetPath = decodeURIComponent(req.body.targetPath);
+    
+    const sourcePath = path.join(config.sharePath, req.query.path || '', filename);
+    const destinationPath = path.join(config.sharePath, targetPath, filename);
 
-    await fs.rename(sourcePath, targetPath);
+    await fs.rename(sourcePath, destinationPath);
 
     res.json({
       success: true,
@@ -194,4 +219,4 @@ router.put('/move/:filename', async (req, res) => {
   }
 });
 
-module.exports = router; 
+module.exports = router;
